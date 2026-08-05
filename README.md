@@ -49,7 +49,7 @@ Agent continues with next step
 
 ```bash
 # From npm
-pi install @lyhue1991/pi-codex
+pi install npm:@lyhue1991/pi-codex
 
 # From GitHub
 pi install github:lyhue1991/pi-codex
@@ -69,7 +69,7 @@ pi list
 To remove:
 
 ```bash
-pi uninstall @lyhue1991/pi-codex
+pi uninstall npm:@lyhue1991/pi-codex
 ```
 
 ### Manual
