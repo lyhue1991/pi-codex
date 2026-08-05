@@ -49,7 +49,7 @@ Agent continues with next step
 
 ```bash
 # From npm
-pi install pi-codex
+pi install @lyhue1991/pi-codex
 
 # From GitHub
 pi install github:lyhue1991/pi-codex
@@ -69,7 +69,7 @@ pi list
 To remove:
 
 ```bash
-pi uninstall pi-codex
+pi uninstall @lyhue1991/pi-codex
 ```
 
 ### Manual
@@ -168,7 +168,7 @@ pi-codex declares its entry point via the `pi.extensions` field:
 
 ```json
 {
-  "name": "pi-codex",
+  "name": "@lyhue1991/pi-codex",
   "pi": {
     "extensions": ["./index.ts"]
   },

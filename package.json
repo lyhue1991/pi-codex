@@ -1,5 +1,5 @@
 {
-	"name": "pi-codex",
+	"name": "@lyhue1991/pi-codex",
 	"version": "0.1.0",
 	"description": "Non-blocking background shell extension for the Pi coding agent — interactive long-running command execution inspired by Codex's unified exec design.",
 	"keywords": [
