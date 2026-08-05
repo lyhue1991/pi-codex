@@ -11,13 +11,15 @@
 		"extension"
 	],
 	"license": "MIT",
-	"author": "",
+	"author": "lyhue1991",
 	"repository": {
 		"type": "git",
-		"url": ""
+		"url": "git+https://github.com/lyhue1991/pi-codex.git"
 	},
-	"homepage": "",
-	"bugs": {},
+	"homepage": "https://github.com/lyhue1991/pi-codex#readme",
+	"bugs": {
+		"url": "https://github.com/lyhue1991/pi-codex/issues"
+	},
 	"type": "module",
 	"files": [
 		"index.ts",

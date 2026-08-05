@@ -48,11 +48,11 @@ Agent continues with next step
 ### Via `pi install` (recommended)
 
 ```bash
-# From npm (once published)
+# From npm
 pi install pi-codex
 
 # From GitHub
-pi install github:<user>/pi-codex
+pi install github:lyhue1991/pi-codex
 
 # Local path
 pi install /path/to/pi-codex
