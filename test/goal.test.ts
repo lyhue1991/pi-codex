@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import piGoalExtension from "../goal.ts";
+import piGoalExtension from "../src/goal.ts";
 
 // Minimal mock of the Pi ExtensionAPI + ExtensionContext surface, sufficient to
 // drive the goal extension's tools, commands, and event handlers without a live
