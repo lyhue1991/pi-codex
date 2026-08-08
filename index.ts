@@ -91,10 +91,13 @@ class RollingBuffer {
 	}
 
 	toSnapshot(): string {
-		const parts: Buffer[] = [...this.head];
-		if (this.hasOmission) {
-			parts.push(Buffer.from(`\n... ${this.omittedBytes} bytes omitted ...\n\n`));
+		// Without omission the tail alone already holds the full history —
+		// prepending the head would duplicate the overlapping bytes.
+		if (!this.hasOmission) {
+			return Buffer.concat(this.tail).toString("utf-8");
 		}
+		const parts: Buffer[] = [...this.head];
+		parts.push(Buffer.from(`\n... ${this.omittedBytes} bytes omitted ...\n\n`));
 		parts.push(...this.tail);
 		return Buffer.concat(parts).toString("utf-8");
 	}
@@ -124,6 +127,8 @@ interface ManagedProcess {
 	deltaBuffer: RollingBuffer;
 	exitCode: number | null;
 	exited: boolean;
+	/** Resolves once the process exits and its stdio streams are drained. */
+	settled: Promise<void>;
 }
 
 function killProcessTree(pid: number): void {
@@ -172,10 +177,18 @@ class BackgroundProcessManager {
 			windowsHide: true,
 		});
 
+		// Swallow async stdin errors (e.g. EPIPE when the process closes stdin
+		// early); writeStdin() reports synchronous write failures to the caller.
+		child.stdin?.on("error", () => {});
+
 		if (commandFromStdin) {
-			child.stdin?.on("error", () => {});
 			child.stdin?.end(command);
 		}
+
+		let resolveSettled!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			resolveSettled = resolve;
+		});
 
 		const mp: ManagedProcess = {
 			id,
@@ -187,6 +200,7 @@ class BackgroundProcessManager {
 			deltaBuffer: new RollingBuffer(),
 			exitCode: null,
 			exited: false,
+			settled,
 		};
 
 		const onData = (data: Buffer): void => {
@@ -200,6 +214,19 @@ class BackgroundProcessManager {
 		child.once("exit", (code) => {
 			mp.exited = true;
 			mp.exitCode = code;
+		});
+
+		// Wake pollers once stdio is drained so no trailing output is lost.
+		child.once("close", () => resolveSettled());
+
+		// Spawn-level failures (e.g. shell binary missing) surface as an "error"
+		// event — without a listener Node raises an uncaught exception.
+		child.once("error", (err) => {
+			mp.exited = true;
+			const message = Buffer.from(`\n[process error] ${err.message}\n`);
+			mp.buffer.append(message);
+			mp.deltaBuffer.append(message);
+			resolveSettled();
 		});
 
 		this.processes.set(id, mp);
@@ -251,7 +278,11 @@ class BackgroundProcessManager {
 			};
 		}
 
-		await sleep(yieldMs);
+		// Return as soon as the process exits rather than waiting out the
+		// full yield window.
+		if (!mp.exited) {
+			await Promise.race([sleep(yieldMs), mp.settled]);
+		}
 
 		const delta = mp.deltaBuffer.toSnapshot();
 		mp.deltaBuffer.reset();
@@ -400,6 +431,7 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 			if (onUpdate) {
 				onUpdate({
 					content: [{ type: "text", text: `$ ${command}\n(spawning background process...)` }],
+					details: { command, sessionId: mp.id, spawning: true },
 				});
 			}
 
@@ -420,11 +452,13 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 				wallMs,
 			});
 
+			const details = { command, sessionId: exited ? null : mp.id, exited, exitCode: exited ? exitCode : null };
+
 			if (onUpdate) {
-				onUpdate({ content: [{ type: "text", text }] });
+				onUpdate({ content: [{ type: "text", text }], details });
 			}
 
-			return { content: [{ type: "text", text }] };
+			return { content: [{ type: "text", text }], details };
 		},
 	});
 
@@ -480,6 +514,7 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 							text: `${action} process ${sessionId} ($ ${mp.command})`,
 						},
 					],
+					details: { sessionId, command: mp.command, action },
 				});
 			}
 
@@ -509,11 +544,13 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 				wallMs,
 			});
 
+			const details = { sessionId: exited ? null : sessionId, exited, exitCode: exited ? exitCode : null };
+
 			if (onUpdate) {
-				onUpdate({ content: [{ type: "text", text }] });
+				onUpdate({ content: [{ type: "text", text }], details });
 			}
 
-			return { content: [{ type: "text", text }] };
+			return { content: [{ type: "text", text }], details };
 		},
 	});
 }

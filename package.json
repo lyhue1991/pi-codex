@@ -1,14 +1,16 @@
 {
 	"name": "@lyhue1991/pi-codex",
 	"version": "0.1.0",
-	"description": "Non-blocking background shell extension for the Pi coding agent — interactive long-running command execution inspired by Codex's unified exec design.",
+	"description": "Non-blocking background shell extension for the Pi coding agent - interactive long-running command execution inspired by Codex's unified exec design.",
 	"keywords": [
 		"pi",
 		"pi-coding-agent",
 		"coding-agent",
 		"background-shell",
 		"non-blocking",
-		"extension"
+		"extension",
+		"goal",
+		"auto-continuation"
 	],
 	"license": "MIT",
 	"author": "lyhue1991",
@@ -21,18 +23,28 @@
 		"url": "https://github.com/lyhue1991/pi-codex/issues"
 	},
 	"type": "module",
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
 	"files": [
 		"index.ts",
+		"goal.ts",
 		"README.md",
 		"LICENSE"
 	],
 	"pi": {
 		"extensions": [
-			"./index.ts"
+			"./index.ts",
+			"./goal.ts"
 		]
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "^0.83.0",
 		"typebox": "^1.3.7"
+	},
+	"devDependencies": {
+		"typescript": "^5.9.3",
+		"vitest": "^4.1.10"
 	}
 }

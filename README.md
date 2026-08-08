@@ -160,7 +160,36 @@ Returns incremental output since the last call, plus exit code if the process fi
 | Interrupt | PTY Ctrl-C write | `child.kill("SIGINT")` |
 | Cleanup | turn/token cancellation | `session_shutdown` event |
 
-pi-codex uses pipe-based stdio instead of PTY, which is sufficient for builds, tests, servers, and most non-TUI commands. Interactive TUI applications (vim, htop) are not supported — use pi's built-in [interactive-shell](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/examples/extensions/interactive-shell.ts) extension for those.
+pi-codex uses pipe-based stdio instead of PTY, which is sufficient for builds, tests, servers, and most non-TUI commands. Interactive TUI applications (vim, htop) are not supported - use pi's built-in [interactive-shell](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/examples/extensions/interactive-shell.ts) extension for those.
+
+## Goal extension
+
+`goal.ts` is a second extension shipped in this package. It ports OpenAI Codex's `/goal` feature to Pi: persistent thread objectives with automatic cross-turn continuation, token/time budgets, and a `/goal` command family. It is independent of the background-shell extension - installing the package enables both.
+
+### What it adds
+
+| Surface | Purpose |
+|---------|---------|
+| `create_goal` tool | Start an objective (optionally with a `token_budget`). Fails if an unfinished goal already exists. |
+| `get_goal` tool | Read current status, budgets, token/time usage, and remaining token budget. |
+| `update_goal` tool | Mark the goal `complete` or `blocked` (user-only statuses are not settable here). |
+| `/goal <objective>` | Set/replace the objective (confirms before replacing an active goal). |
+| `/goal edit` | Edit the objective (revives a `complete`/`budget_limited` goal to `active`). |
+| `/goal pause` / `/goal resume` | Pause or resume auto-continuation. |
+| `/goal clear` | Delete the goal. |
+| `/goal` | Print a summary. |
+
+### How it works
+
+- **Persistence**: state is written via `pi.appendEntry("goal", state)` and rehydrated from `sessionManager.getEntries()` on `session_start`, so goals survive restarts and forks.
+- **Steering**: while a goal is `active`, `before_agent_start` injects a hidden `goal-context` reminder each turn; the `context` event drops stale steering messages so context never bloats across long runs.
+- **Auto-continuation**: on `agent_settled`, if the goal is still `active` and within budget, a new turn is triggered carrying the full continuation prompt (objective, budget, completion/blocked audit).
+- **Budgets**: `turn_end` accounts token usage (`input + output + cacheRead + cacheWrite`) and wall time. Exceeding `token_budget` transitions the goal to `budget_limited` and stops continuation.
+- **Status line**: a footer `goal: <status> · <time> · <tokens>` indicator is kept current.
+
+### Status model
+
+`active` -> `paused` (user) · `blocked` (model, after 3 consecutive goal turns at an impasse) · `budget_limited` (budget exhausted) · `complete` (model). `usage_limited` is reserved for host-level limits. `budget_limited` and `complete` are terminal; resume is only available for `paused`/`blocked`/`usage_limited`.
 
 ## `package.json` fields
 
@@ -170,7 +199,7 @@ pi-codex declares its entry point via the `pi.extensions` field:
 {
   "name": "@lyhue1991/pi-codex",
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./index.ts", "./goal.ts"]
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.83.0",
