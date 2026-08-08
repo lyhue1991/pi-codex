@@ -1,218 +1,139 @@
 # pi-codex
 
-Non-blocking background shell extension for the [Pi](https://github.com/earendil-works/pi) coding agent.
+> 在 [Pi](https://github.com/earendil-works/pi) 中获得和 [OpenAI Codex](https://github.com/openai/codex) 桌面应用一致的 AI 编程体验。
 
-Inspired by [OpenAI Codex](https://github.com/openai/codex)'s unified-exec / `write_stdin` design, this extension lets the agent run long-running commands (builds, tests, dev servers, file watchers) without blocking the workflow.
+pi-codex 是 Pi 的一个插件包，复刻了 Codex 中最核心的两项能力：**异步 Shell 工具**（后台运行命令不阻塞 agent）和 **Goal 长任务管理**（持久化目标 + 自动续跑 + token/时间预算）。
 
-## The problem
+安装后，你的 Pi agent 将拥有与 Codex 几乎相同的工具集和行为模式。
 
-When the Pi agent runs a long bash command via the built-in `bash` tool, it blocks until the command finishes. A 10-minute build or a long-running test suite stalls the entire agent loop — no monitoring, no intervention, no progress reports.
+---
 
-## The solution
+## 功能一览
 
-pi-codex adds two LLM-callable tools that work together:
+| 功能 | 对应 Codex 能力 | 说明 |
+|------|----------------|------|
+| `bash_bg` + `bash_io` 工具 | unified-exec / `write_stdin` | 后台运行长命令、可轮询输出、可写入 stdin、可中断 |
+| `/goal` 命令族 | `/goal` + goal widget | 目标设定 / 编辑 / 暂停 / 恢复 / 清除，带 token 和时间预算 |
+| `create_goal` / `get_goal` / `update_goal` 工具 | `create_goal` / `get_goal` / `update_goal` | agent 可编程的 goal 状态机 |
+| Steering 注入 | 同 Codex | 运行中途编辑 goal 通过 steering 消息注入，**当前 agent run 内立即生效** |
+| 自动续跑 | auto-continuation | agent settled 后若 goal 仍 active 且预算充足，自动开启下一 turn |
+| 持久化 | 同 Codex | goal 状态写入 session entry，重启/fork 后自动恢复 |
 
-| Tool | Purpose |
-|------|---------|
-| **`bash_bg`** | Spawn a command in the background, wait briefly for initial output, then return a `session_id` if the process is still running. |
-| **`bash_io`** | Poll a running process for new output, write to its stdin, or send Ctrl-C — all without blocking the agent loop. |
+---
 
-### How it works
+## 快速开始
 
-```
-Agent calls bash_bg("npm run build")
-  └─ spawns process, waits 10s for initial output
-  └─ process still running → returns session_id: 1
-
-Agent calls bash_io(session_id=1, chars="")
-  └─ polls for 5s, returns new output since last poll
-  └─ process still running → returns session_id: 1
-
-Agent calls bash_io(session_id=1, chars="")
-  └─ polls for 5s, returns new output
-  └─ process exited with code 0 → returns exit code
-
-Agent continues with next step
-```
-
-### Key features
-
-- **Non-blocking**: The agent yields control after `yield_time_ms` and can do other work between polls.
-- **Interactive**: Write to stdin to respond to prompts, answer y/n confirmations, or provide credentials.
-- **Interruptible**: Send `\u0003` (Ctrl-C) to kill a misbehaving process without losing the agent's context.
-- **Bounded memory**: A rolling head+tail buffer (4 KiB head + 252 KiB tail) caps retained output per process.
-- **Session-scoped**: Processes survive across tool calls but are cleaned up on session shutdown.
-
-## Installation
-
-### Via `pi install` (recommended)
+### 安装
 
 ```bash
-# From npm
-pi install npm:@lyhue1991/pi-codex
-
-# From GitHub
+# 从 GitHub 安装
 pi install github:lyhue1991/pi-codex
 
-# Local path
+# 本地开发
 pi install /path/to/pi-codex
 ```
 
-`pi install` clones/downloads the package into pi's managed extension directory, runs `npm install` for any dependencies, and registers it in settings. The extension loads automatically on the next pi startup.
-
-To verify it's installed:
+验证安装：
 
 ```bash
 pi list
 ```
 
-To remove:
+### 使用 Goal
+
+在对话中直接输入：
+
+```
+/goal 实现用户登录功能，支持邮箱和 OAuth
+```
+
+agent 会围绕这个目标持续工作。随时可以：
+
+```
+/goal pause       # 暂停自动续跑
+/goal resume      # 恢复
+/goal edit        # 修改目标内容（运行中途也可，通过 steering 注入立即生效）
+/goal clear       # 清除目标
+/goal             # 查看当前状态
+```
+
+### 使用后台 Shell
+
+agent 会自动选择 `bash_bg` / `bash_io` 来处理长时间运行的命令（构建、测试、dev server 等），无需手动干预。
+
+---
+
+## 核心机制
+
+### Goal 状态机
+
+```
+active ──pause──► paused ──resume──► active
+  │                                     │
+  ├── 预算耗尽 ──► budget_limited       ├── 达成 ──► complete
+  ├── 连续 3 轮无进展 ──► blocked       └── 用户清除 ──► (删除)
+  └── 用户清除 ──► (删除)
+```
+
+- **complete / budget_limited** 为终态，只能 `edit` 重新激活或 `clear` 清除
+- **paused / blocked** 可以 `resume` 恢复
+- `edit` 会将 `complete` / `budget_limited` 的目标重新拉回 `active`
+
+### Steering 注入（mid-run 编辑）
+
+当 agent 正在运行时编辑 goal，新 objective 以 **steering 消息**形式注入队列。agent 在每个 turn 边界轮询 steering 队列，下一次 LLM 请求就会包含更新后的目标 — 在当前 agent run 内生效，无需等待当前 run 结束。
+
+```
+turn N: LLM 请求 (旧 objective)
+           │
+用户编辑 goal → 注入 steering 消息
+           │
+turn N+1: 轮询到 steering → 塞进 context
+turn N+1: LLM 请求 (已包含新 objective)  ← 当前 run 内生效
+```
+
+### 异步 Shell 架构
+
+```
+bash_bg("npm run build")
+  └─ spawn 子进程，等待 yield_time_ms
+  └─ 仍在运行 → 返回 session_id
+
+bash_io(session_id, chars="")
+  └─ 轮询增量输出
+  └─ 进程结束 → 返回 exit code
+```
+
+输出采用 head+tail 滚动缓冲（4 KiB 头部 + 252 KiB 尾部），单进程内存占用有上限。
+
+---
+
+## 对比 Codex
+
+| 方面 | Codex | pi-codex |
+|------|-------|----------|
+| 后台进程 | PTY (tokio) | pipe (`child_process.spawn`) |
+| 输出截断 | HeadTailBuffer (1 MiB) | RollingBuffer (256 KiB) |
+| Goal 持久化 | session entries | session entries |
+| Mid-run 编辑 | steering 注入 | steering 注入 |
+| 自动续跑 | turn 边界 auto-continue | agent_settled 触发新 turn |
+| Goal UI 面板 | 桌面端原生 widget | pi-web GoalPanel（多行 + 内联编辑） |
+
+---
+
+## 开发
 
 ```bash
-pi uninstall npm:@lyhue1991/pi-codex
+npm install
+npm run typecheck
+npm test
 ```
 
-### Manual
+测试覆盖 goal 全部操作（28 个用例）。
 
-Copy or symlink this directory to:
+## 要求
 
-```bash
-# Project-local
-cp -r pi-codex /path/to/project/.pi/extensions/pi-codex
-
-# Global
-cp -r pi-codex ~/.pi/agent/extensions/pi-codex
-```
-
-Pi discovers extensions in `.pi/extensions/` automatically on startup — no additional configuration needed.
-
-## How the agent uses it
-
-Once installed, the extension adds the two tools to the agent's system prompt:
-
-```
-## Available tools
-- bash_bg: non-blocking shell, returns session_id for bash_io
-- bash_io: poll or send input to bash_bg process
-
-## Guidelines
-- Use `bash_bg` for long-running commands (builds, tests, servers).
-- Poll a running process by calling `bash_io` with an empty `chars` string.
-- Send input or Ctrl-C via `bash_io` with `chars` set to the input text or \u0003.
-- After a process exits, do NOT call `bash_io` for that session_id again.
-```
-
-The agent learns when to use `bash_bg` vs the regular `bash` tool from these guidelines.
-
-## API reference
-
-### `bash_bg`
-
-Spawns a command and waits for initial output.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `command` | `string` | — | Bash command to execute |
-| `yield_time_ms` | `int?` | `10000` | Ms to wait before returning (range: 250–30000) |
-
-Returns the initial output, exit code (if finished), or `session_id` (if still running).
-
-### `bash_io`
-
-Interacts with a running background process.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `session_id` | `int` | — | Process ID from `bash_bg` |
-| `chars` | `string?` | `""` | Text to write to stdin. `\u0003` = Ctrl-C |
-| `yield_time_ms` | `int?` | `5000` | Ms to wait for output (range: 250–30000) |
-
-Returns incremental output since the last call, plus exit code if the process finished.
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────┐
-│  Agent loop (pi-agent-core)                          │
-│                                                      │
-│  bash_bg ──► BackgroundProcessManager.spawn()        │
-│                  ├── child_process.spawn()           │
-│                  ├── RollingBuffer (head+tail)       │
-│                  └── returns session_id              │
-│                                                      │
-│  bash_io ──► BackgroundProcessManager.writeStdin()   │
-│                  ├── child.stdin.write() / SIGINT    │
-│                  ├── poll delta buffer               │
-│                  └── returns output + status         │
-│                                                      │
-│  session_shutdown ──► manager.cleanup()              │
-└──────────────────────────────────────────────────────┘
-```
-
-### Comparison with Codex
-
-| Aspect | Codex unified-exec | pi-codex |
-|--------|-------------------|----------|
-| Process spawn | PTY (tokio) | pipe (`child_process.spawn`) |
-| Output streaming | broadcast channels + delta events | RollingBuffer + delta snapshots |
-| Output truncation | HeadTailBuffer (1 MiB) | RollingBuffer (256 KiB) |
-| Process store | `ProcessStore` (Mutex<HashMap>) | `Map<number, ManagedProcess>` |
-| Interrupt | PTY Ctrl-C write | `child.kill("SIGINT")` |
-| Cleanup | turn/token cancellation | `session_shutdown` event |
-
-pi-codex uses pipe-based stdio instead of PTY, which is sufficient for builds, tests, servers, and most non-TUI commands. Interactive TUI applications (vim, htop) are not supported - use pi's built-in [interactive-shell](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/examples/extensions/interactive-shell.ts) extension for those.
-
-## Goal extension
-
-`goal.ts` is a second extension shipped in this package. It ports OpenAI Codex's `/goal` feature to Pi: persistent thread objectives with automatic cross-turn continuation, token/time budgets, and a `/goal` command family. It is independent of the background-shell extension - installing the package enables both.
-
-### What it adds
-
-| Surface | Purpose |
-|---------|---------|
-| `create_goal` tool | Start an objective (optionally with a `token_budget`). Fails if an unfinished goal already exists. |
-| `get_goal` tool | Read current status, budgets, token/time usage, and remaining token budget. |
-| `update_goal` tool | Mark the goal `complete` or `blocked` (user-only statuses are not settable here). |
-| `/goal <objective>` | Set/replace the objective (confirms before replacing an active goal). |
-| `/goal edit` | Edit the objective (revives a `complete`/`budget_limited` goal to `active`). |
-| `/goal pause` / `/goal resume` | Pause or resume auto-continuation. |
-| `/goal clear` | Delete the goal. |
-| `/goal` | Print a summary. |
-
-### How it works
-
-- **Persistence**: state is written via `pi.appendEntry("goal", state)` and rehydrated from `sessionManager.getEntries()` on `session_start`, so goals survive restarts and forks.
-- **Steering**: while a goal is `active`, `before_agent_start` injects a hidden `goal-context` reminder each turn; the `context` event drops stale steering messages so context never bloats across long runs.
-- **Auto-continuation**: on `agent_settled`, if the goal is still `active` and within budget, a new turn is triggered carrying the full continuation prompt (objective, budget, completion/blocked audit).
-- **Budgets**: `turn_end` accounts token usage (`input + output + cacheRead + cacheWrite`) and wall time. Exceeding `token_budget` transitions the goal to `budget_limited` and stops continuation.
-- **Status line**: a footer `goal: <status> · <time> · <tokens>` indicator is kept current.
-
-### Status model
-
-`active` -> `paused` (user) · `blocked` (model, after 3 consecutive goal turns at an impasse) · `budget_limited` (budget exhausted) · `complete` (model). `usage_limited` is reserved for host-level limits. `budget_limited` and `complete` are terminal; resume is only available for `paused`/`blocked`/`usage_limited`.
-
-## `package.json` fields
-
-pi-codex declares its entry point via the `pi.extensions` field:
-
-```json
-{
-  "name": "@lyhue1991/pi-codex",
-  "pi": {
-    "extensions": ["./index.ts", "./goal.ts"]
-  },
-  "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.83.0",
-    "typebox": "^1.3.7"
-  }
-}
-```
-
-The `dependencies` are declared for type-checking and tooling. At runtime, pi's extension loader resolves `@earendil-works/pi-coding-agent` and `typebox` through its own virtual module system — npm installs with `--legacy-peer-deps` so these host-provided packages are never duplicated.
-
-## Requirements
-
-- [Pi](https://github.com/earendil-works/pi) coding agent v0.83.0+
+- Pi v0.83.0+
 - Node.js 22+
 
 ## License
