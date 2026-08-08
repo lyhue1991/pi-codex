@@ -4,7 +4,7 @@
 
 pi-codex 是 Pi 的一个插件包，复刻了 Codex 中最核心的两项能力：**异步 Shell 工具**（后台运行命令不阻塞 agent）和 **Goal 长任务管理**（持久化目标 + 自动续跑 + token预算）。
 
-安装后，你的 Pi agent 将拥有与 Codex 几乎相同的工具集和行为模式。
+安装后，你的 Pi agent 将拥有与 Codex 几乎相同的工具集和行为模式。其中 `bash` 工具会**覆盖 Pi 内置的 bash**，变为非阻塞模式：短命令直接返回完整输出，长命令在 2 秒后返回 `session_id` 供 `bash_io` 轮询。
 
 ---
 
@@ -12,7 +12,7 @@ pi-codex 是 Pi 的一个插件包，复刻了 Codex 中最核心的两项能力
 
 | 功能 | 对应 Codex 能力 | 说明 |
 |------|----------------|------|
-| `bash_bg` + `bash_io` 工具 | unified-exec / `write_stdin` | 后台运行长命令、可轮询输出、可写入 stdin、可中断 |
+| `bash` + `bash_io` 工具 | unified-exec / `write_stdin` | 覆盖内置 bash：短命令直接返回，长命令 2s 后返回 session_id 可轮询/写入/中断 |
 | `/goal` 命令族 | `/goal` + goal widget | 目标设定 / 编辑 / 暂停 / 恢复 / 清除，带 token 和时间预算 |
 
 
@@ -41,7 +41,7 @@ pi list
 为了获得完整的 Codex 式 UI 体验（包括 goal 面板、内联编辑、暂停/恢复按钮），推荐同时安装 [lyhue1991/pi-web](https://github.com/lyhue1991/pi-web)：
 
 ```bash
-pi install github:lyhue1991/pi-web
+npm install @lyhue1991/pi-web
 ```
 
 pi-web 是 Pi 的 Web 前端，已内置 GoalPanel 组件，支持多行目标展示、内联编辑、以及运行中途的 pause/resume/clear 操作。不安装 pi-web 也能用，但只能通过命令行操作 goal。
@@ -57,7 +57,7 @@ pi-web 是 Pi 的 Web 前端，已内置 GoalPanel 组件，支持多行目标�
 
 ### 使用后台 Shell
 
-agent 会自动选择 `bash_bg` / `bash_io` 来处理长时间运行的命令（常见python数据分析、模型训练、以及打包等场景命令），无需手动干预。
+`bash` 覆盖了 Pi 内置的同步 bash，成为唯一的 shell 工具。短命令（ls、grep、git status 等）在默认 2 秒内完成，直接返回完整输出；长命令（构建、测试、dev server、模型训练等）超过 2 秒后返回 `session_id`，agent 会自动用 `bash_io` 轮询输出、发送输入或 Ctrl-C 中断，无需手动干预。
 
 ```
 帮我跑一下这个 train.py脚本，处理和修复各种报错问题，完成后发消息给我。
@@ -69,13 +69,13 @@ agent 会自动选择 `bash_bg` / `bash_io` 来处理长时间运行的命令（
 ### 异步 Shell 架构
 
 ```
-bash_bg("python train.py")
-  └─ spawn 子进程，等待 yield_time_ms
-  └─ 仍在运行 → 返回 session_id
+bash("python train.py")
+  └─ spawn 子进程，等待 yield_time_ms（默认 2s）
+  └─ 仍在运行 -> 返回 session_id
 
 bash_io(session_id, chars="")
   └─ 轮询增量输出
-  └─ 进程结束 → 返回 exit code
+  └─ 进程结束 -> 返回 exit code
 ```
 
 输出采用 head+tail 滚动缓冲（4 KiB 头部 + 252 KiB 尾部），单进程内存占用有上限。
@@ -97,14 +97,14 @@ active ──pause──► paused ──resume──► active
 
 ### Steering 注入（mid-run 编辑）
 
-当 agent 正在运行时编辑 goal，新 objective 以 **steering 消息**形式注入队列。agent 在每个 turn 边界轮询 steering 队列，下一次 LLM 请求就会包含更新后的目标 — 在当前 agent run 内生效，无需等待当前 run 结束。
+当 agent 正在运行时编辑 goal，新 objective 以 **steering 消息**形式注入队列。agent 在每个 turn 边界轮询 steering 队列，下一次 LLM 请求就会包含更新后的目标 - 在当前 agent run 内生效，无需等待当前 run 结束。
 
 ```
 turn N: LLM 请求 (旧 objective)
            │
-用户编辑 goal → 注入 steering 消息
+用户编辑 goal -> 注入 steering 消息
            │
-turn N+1: 轮询到 steering → 塞进 context
+turn N+1: 轮询到 steering -> 塞进 context
 turn N+1: LLM 请求 (已包含新 objective)  ← 当前 run 内生效
 ```
 

@@ -1,14 +1,18 @@
 /**
- * pi-codex — Non-blocking background shell for the Pi coding agent.
+ * pi-codex - Non-blocking shell for the Pi coding agent.
  *
- * Adds two LLM-callable tools that enable interactive, long-running command
- * execution — modelled on OpenAI Codex's unified-exec / write_stdin design.
+ * Registers a `bash` tool that overrides Pi's built-in bash with Codex-style
+ * unified-exec behaviour, plus a `bash_io` companion for polling/input.
  *
- *   bash_bg  — spawn a command, wait up to yield_time_ms for initial output,
- *              then return. If the process is still running, returns a
- *              session_id so the model can poll or interact.
- *   bash_io  — write to a running process's stdin (or send Ctrl-C), collect
+ *   bash     - spawn a command, wait up to yield_time_ms (default 2s) for
+ *              output, then return. If the process is still running, returns
+ *              a session_id so the model can poll or interact.
+ *   bash_io  - write to a running process's stdin (or send Ctrl-C), collect
  *              output for yield_time_ms, then return.
+ *
+ * Registering a tool named "bash" overrides Pi's built-in synchronous bash:
+ * short commands return full output directly; long-running commands return
+ * early with a session_id instead of blocking the agent.
  *
  * Installation:
  *   Copy or symlink this directory to:
@@ -39,7 +43,7 @@ import { Type } from "typebox";
 
 const MIN_YIELD_MS = 250;
 const MAX_YIELD_MS = 30_000;
-const DEFAULT_EXEC_YIELD_MS = 10_000;
+const DEFAULT_EXEC_YIELD_MS = 2_000;
 const MIN_POLL_YIELD_MS = 5_000;
 const HEAD_BYTES = 4 * 1024; // keep first 4 KiB
 const TAIL_BYTES = 252 * 1024; // keep last 252 KiB (total: 256 KiB)
@@ -386,27 +390,28 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 	});
 
 	// -------------------------------------------------------------------------
-	// Tool: bash_bg
+	// Tool: bash
 	// -------------------------------------------------------------------------
 
 	pi.registerTool({
-		name: "bash_bg",
-		label: "Background Shell",
-		description: `Execute a bash command in the background. Unlike the regular bash tool, this does not block until completion. Instead, it waits up to yield_time_ms (default 10s) for initial output, then returns. If the process is still running, it returns a session_id that can be used with bash_io to poll output or send input. Use this for long-running commands like builds, tests, dev servers, file watchers, etc. For short commands that finish quickly, prefer the regular bash tool instead.`,
+		name: "bash",
+		label: "Bash",
+		description: `Execute a bash command in the current working directory. Spawns the command and waits up to yield_time_ms (default 2s) for output, then returns. If the command finishes within the wait, returns the full output and exit code. If the command is still running after the wait, returns the output collected so far plus a session_id - use bash_io with that session_id to poll for more output, send input, or interrupt. This is the primary shell tool; use it for all commands including ls, grep, find, builds, tests, and dev servers.`,
 
 		parameters: Type.Object({
 			command: Type.String({ description: "Bash command to execute" }),
 			yield_time_ms: Type.Optional(
 				Type.Integer({
-					description: `Milliseconds to wait for initial output before returning (default: ${DEFAULT_EXEC_YIELD_MS}, range: ${MIN_YIELD_MS}-${MAX_YIELD_MS}). The process continues running in the background after this time elapses.`,
+					description: `Milliseconds to wait for output before returning (default: ${DEFAULT_EXEC_YIELD_MS}, range: ${MIN_YIELD_MS}-${MAX_YIELD_MS}). If the command is still running after this time, it continues in the background and a session_id is returned for bash_io.`,
 				}),
 			),
 		}),
 
-		promptSnippet: "bash_bg(command, yield_time_ms?): non-blocking shell, returns session_id for bash_io",
+		promptSnippet: "bash(command, yield_time_ms?): run any shell command; long-running ones return session_id for bash_io",
 
 		promptGuidelines: [
-			"Use `bash_bg` for long-running commands (builds, tests, servers). It returns a `session_id` you can poll via `bash_io`.",
+			"`bash` runs all shell commands. Short commands finish within yield_time_ms (default 2s) and return full output directly.",
+			"For commands still running after the wait, `bash` returns a `session_id` - poll it via `bash_io` (empty chars) or raise yield_time_ms for commands that need more time to produce output.",
 			"Poll a running process by calling `bash_io` with an empty `chars` string and the `session_id`.",
 			"Send input or Ctrl-C to a running process via `bash_io` with `chars` set to the input text or `\\u0003` for Ctrl-C.",
 			"After a process exits (exit code returned), do NOT call `bash_io` for that `session_id` again.",
@@ -469,11 +474,11 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "bash_io",
 		label: "Interact with Background Process",
-		description: `Interact with a background process started by bash_bg. Can write text to the process's stdin, send Ctrl-C (use "\\u0003" as chars), or poll for new output (leave chars empty). Always waits yield_time_ms (default 5s) to collect output before returning. Use this to monitor long-running tasks, respond to prompts, or send additional commands.`,
+		description: `Interact with a background process started by bash. Can write text to the process's stdin, send Ctrl-C (use "\\u0003" as chars), or poll for new output (leave chars empty). Always waits yield_time_ms (default 5s) to collect output before returning. Use this to monitor long-running tasks, respond to prompts, or send additional commands.`,
 
 		parameters: Type.Object({
 			session_id: Type.Integer({
-				description: "The session_id returned by bash_bg for the running process.",
+				description: "The session_id returned by bash for the running process.",
 			}),
 			chars: Type.Optional(
 				Type.String({
@@ -487,7 +492,7 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 			),
 		}),
 
-		promptSnippet: "bash_io(session_id, chars?, yield_time_ms?): poll or send input to bash_bg process",
+		promptSnippet: "bash_io(session_id, chars?, yield_time_ms?): poll or send input to a bash process",
 
 		async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
 			const sessionId = params.session_id;
@@ -501,7 +506,7 @@ export default function piCodexExtension(pi: ExtensionAPI): void {
 			const mp = manager.get(sessionId);
 			if (!mp) {
 				throw new Error(
-					`No background process with session_id ${sessionId}. The process may have exited and been cleaned up, or the ID is invalid. Use bash_bg to start a new process.`,
+					`No background process with session_id ${sessionId}. The process may have exited and been cleaned up, or the ID is invalid. Use bash to start a new process.`,
 				);
 			}
 

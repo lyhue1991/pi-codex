@@ -2,7 +2,7 @@
  * pi-codex — Bring Codex-like AI coding experience to Pi.
  *
  * Entry point that registers all extensions in this package:
- *   - bash extension (bash_bg / bash_io tools)
+ *   - bash extension (bash / bash_io tools)
  *   - goal extension (/goal command + goal tools + auto-continuation)
  */
 
