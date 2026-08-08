@@ -138,6 +138,18 @@ class GoalController {
 		return this.goal;
 	}
 
+
+		setTokenBudget(tokenBudget: number | null): GoalState | null {
+			if (!this.goal) return null;
+			const wasBudgetLimited = this.goal.status === "budget_limited";
+			let status = this.goal.status;
+			if (wasBudgetLimited && tokenBudget !== null && tokenBudget > this.goal.tokens_used) {
+				status = "active";
+			}
+			this.goal = { ...this.goal, token_budget: tokenBudget, status, updated_at_ms: Date.now() };
+			this.persist();
+			return this.goal;
+		}
 	beginTurn(): void {
 		this.turnStartMs = Date.now();
 	}
@@ -274,6 +286,13 @@ function formatUpdateResult(goal: GoalState, status: "complete" | "blocked"): st
 		`Objective: ${goal.objective}`,
 		`Use /goal resume to retry once the blocker is resolved.`,
 	].join("\n");
+}
+
+function formatBudgetUpdateResult(goal: GoalState): string {
+	if (goal.token_budget === null) {
+		return `Token budget removed. Goal is now unbounded.`;
+	}
+	return `Token budget updated to ${formatTokens(goal.token_budget)}. Currently used: ${formatTokens(goal.tokens_used)}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -673,24 +692,50 @@ export default function piGoalExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: "update_goal",
-		label: "Update Goal Status",
+		label: "Update Goal",
 		description:
-			'Update the existing goal. Use this tool only to mark the goal achieved or genuinely blocked. Set status to "complete" only when the objective has actually been achieved and no required work remains. Set status to "blocked" only after the same blocking condition has recurred for at least three consecutive goal turns. You cannot pause, resume, or change the budget with this tool; those are user-only via /goal.',
-		promptSnippet: 'update_goal(status): mark goal "complete" or "blocked"',
+			'Update the existing goal. Use this to mark the goal complete/blocked, or to adjust the token budget when the user requests a change. Set status to "complete" only when the objective has actually been achieved and verified. Set status to "blocked" only after the same blocking condition has recurred for at least three consecutive goal turns. Set token_budget when the user explicitly asks to change the budget (raise, lower, or remove it). If the user modifies the goal objective and the new description implies a different budget, update token_budget accordingly.',
+		promptSnippet: 'update_goal(status?, token_budget?): update goal status or token budget',
 		promptGuidelines: [
 			'Call update_goal with status "complete" only when the objective is fully achieved and verified against current state.',
 			'Call update_goal with status "blocked" only after the same blocker recurred for at least three consecutive goal turns.',
-			'You cannot pause, resume, or change the budget with update_goal; those are user-only via /goal.',
+			'Update token_budget when the user explicitly changes the budget (e.g. "raise the budget to 100k", "remove the token limit").',
+			'If the user edits the goal objective and the new description implies a different budget amount, update token_budget to match.',
+			'Set token_budget to null when the user wants to remove the budget limit entirely.',
+			'You cannot pause or resume the goal with update_goal; those are user-only via /goal.',
 		],
 		parameters: Type.Object({
-			status: Type.Union([Type.Literal("complete"), Type.Literal("blocked")], {
-				description: 'Required. "complete" when achieved, "blocked" when at a genuine impasse after 3 consecutive goal turns.',
-			}),
+			status: Type.Optional(
+				Type.Union([Type.Literal("complete"), Type.Literal("blocked")], {
+					description: '"complete" when achieved, "blocked" when at a genuine impasse after 3 consecutive goal turns.',
+				}),
+			),
+			token_budget: Type.Optional(
+				Type.Union([Type.Integer(), Type.Null()], {
+					description: 'New token budget. Positive integer to set, null to remove the budget limit. Omit if unchanged.',
+				}),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, onUpdate, _ctx) {
 			if (!controller.goal) throw new Error("update_goal: no active goal exists");
-			const goal = controller.setStatus(params.status);
-			const text = formatUpdateResult(goal!, params.status);
+			if (params.status === undefined && params.token_budget === undefined) {
+				throw new Error("update_goal: at least one of status or token_budget must be provided");
+			}
+			if (params.token_budget !== undefined && params.token_budget !== null) {
+				if (!Number.isInteger(params.token_budget) || params.token_budget <= 0) {
+					throw new Error("update_goal: token_budget must be a positive integer or null");
+				}
+			}
+			let goal: GoalState = controller.goal;
+			if (params.token_budget !== undefined) {
+				goal = controller.setTokenBudget(params.token_budget ?? null)!;
+			}
+			if (params.status !== undefined) {
+				goal = controller.setStatus(params.status)!;
+			}
+			const text = params.status !== undefined
+				? formatUpdateResult(goal, params.status)
+				: formatBudgetUpdateResult(goal);
 			if (onUpdate) onUpdate({ content: [{ type: "text", text }], details: goal });
 			return { content: [{ type: "text", text }], details: goal };
 		},

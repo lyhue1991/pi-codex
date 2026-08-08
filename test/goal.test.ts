@@ -230,6 +230,50 @@ describe("phase 3: accounting and budget", () => {
 		await flush();
 		expect(m.sentUserMessages.length).toBe(0);
 	});
+
+	it("update_goal can raise the token budget", async () => {
+		const m = setup();
+		await tool(m, "create_goal").execute("c", { objective: "o", token_budget: 1000 }, undefined, undefined, m.ctx);
+		await tool(m, "update_goal").execute("u", { token_budget: 5000 }, undefined, undefined, m.ctx);
+		const g = await tool(m, "get_goal").execute("g", {}, undefined, undefined, m.ctx);
+		expect(g.details.token_budget).toBe(5000);
+		expect(g.details.status).toBe("active");
+	});
+
+	it("update_goal can remove the token budget (set to null)", async () => {
+		const m = setup();
+		await tool(m, "create_goal").execute("c", { objective: "o", token_budget: 1000 }, undefined, undefined, m.ctx);
+		await tool(m, "update_goal").execute("u", { token_budget: null }, undefined, undefined, m.ctx);
+		const g = await tool(m, "get_goal").execute("g", {}, undefined, undefined, m.ctx);
+		expect(g.details.token_budget).toBeNull();
+		expect(g.details.status).toBe("active");
+	});
+
+	it("update_goal revives budget_limited goal when budget is raised above usage", async () => {
+		const m = setup();
+		await tool(m, "create_goal").execute("c", { objective: "o", token_budget: 1000 }, undefined, undefined, m.ctx);
+		m.emit("turn_start", {});
+		m.emit("turn_end", { message: { usage: { input: 600, output: 500, cacheRead: 0, cacheWrite: 0 } } }, m.ctx);
+		const before = await tool(m, "get_goal").execute("g", {}, undefined, undefined, m.ctx);
+		expect(before.details.status).toBe("budget_limited");
+		await tool(m, "update_goal").execute("u", { token_budget: 5000 }, undefined, undefined, m.ctx);
+		const after = await tool(m, "get_goal").execute("g", {}, undefined, undefined, m.ctx);
+		expect(after.details.status).toBe("active");
+		expect(after.details.token_budget).toBe(5000);
+	});
+
+	it("update_goal rejects invalid token_budget values", async () => {
+		const m = setup();
+		await tool(m, "create_goal").execute("c", { objective: "o" }, undefined, undefined, m.ctx);
+		await expect(tool(m, "update_goal").execute("u", { token_budget: 0 }, undefined, undefined, m.ctx)).rejects.toThrow("positive integer");
+		await expect(tool(m, "update_goal").execute("u", { token_budget: -100 }, undefined, undefined, m.ctx)).rejects.toThrow("positive integer");
+	});
+
+	it("update_goal requires at least one parameter", async () => {
+		const m = setup();
+		await tool(m, "create_goal").execute("c", { objective: "o" }, undefined, undefined, m.ctx);
+		await expect(tool(m, "update_goal").execute("u", {}, undefined, undefined, m.ctx)).rejects.toThrow("at least one");
+	});
 });
 
 describe("phase 4: /goal command family", () => {
