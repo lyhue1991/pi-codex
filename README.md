@@ -39,6 +39,16 @@ pi install /path/to/pi-codex
 pi list
 ```
 
+### 推荐搭配 pi-web
+
+为了获得完整的 Codex 式 UI 体验（包括 goal 面板、内联编辑、暂停/恢复按钮），推荐同时安装 [lyhue1991/pi-web](https://github.com/lyhue1991/pi-web)：
+
+```bash
+pi install github:lyhue1991/pi-web
+```
+
+pi-web 是 Pi 的 Web 前端，已内置 GoalPanel 组件，支持多行目标展示、内联编辑、以及运行中途的 pause/resume/clear 操作。不安装 pi-web 也能用，但只能通过命令行操作 goal。
+
 ### 使用 Goal
 
 在对话中直接输入：
