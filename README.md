@@ -16,8 +16,8 @@ pi-codex 是 Pi 的一个插件包，复刻了 Codex 中核心的两项能力：
 
 | 功能 | 对应 Codex 能力 | 说明 |
 |------|----------------|------|
-| `bash` + `bash_io` 工具 | unified-exec / `write_stdin` | 覆盖内置 bash：短命令直接返回，长命令 2s 后返回 session_id 可轮询/写入/中断 |
 | `/goal` 命令族 | `/goal` + goal widget | 目标设定 / 编辑 / 暂停 / 恢复 / 清除，带 token预算 |
+| `bash` + `bash_io` 工具 | unified-exec / `write_stdin` | 覆盖内置 bash：短命令直接返回，长命令 2s 后返回 session_id 可轮询/写入/中断 |
 
 
 ---
@@ -62,11 +62,18 @@ pi-web 是 Pi 的 Web 前端，已内置 GoalPanel 组件，支持目标展示�
 
 ### 3，使用 Goal
 
-在对话中直接输入：
+在对话中自然语言直接输入 (方便设置具体token预算)：
 
 ```
 设一个goal，预算100万token。开发一个黄金矿工html网页游戏。测试确保游戏可玩无BUG。
 ```
+
+也可以打 /goal 命令输入 (默认不限制token预算)。
+
+```
+/goal 开发一个黄金矿工html网页游戏。测试确保游戏可玩无BUG。
+```
+
 
 
 ### 4，使用后台 Shell
