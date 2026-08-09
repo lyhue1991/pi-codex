@@ -23,6 +23,9 @@ pi-codex 是 Pi 的一个插件包，复刻了 Codex 中最核心的两项能力
 ### 安装
 
 ```bash
+# 从 npm 安装
+pi install npm:@lyhue1991/pi-codex
+
 # 从 GitHub 安装
 pi install github:lyhue1991/pi-codex
 
